@@ -4,13 +4,13 @@ build-all: build-benchmark
 
 build-benchmark:
 	echo "Building benchmark container HTTPS_PROXY=${HTTPS_PROXY} HTTP_PROXY=${HTTP_PROXY}"
-	log_dir=./results docker compose build
+	log_dir=./results PT_TAG=$(PT_TAG) docker compose build
 
 run-benchmark:
-	log_dir=./results docker compose up --build
+	log_dir=./results PT_TAG=$(PT_TAG) docker compose up --build
 
 start-performance-tools:
-	log_dir=./results docker compose up -d
+	log_dir=./results PT_TAG=$(PT_TAG) docker compose up -d
 
 stop-performance-tools:
-	log_dir=./results docker compose down
+	log_dir=./results PT_TAG=$(PT_TAG) docker compose down
