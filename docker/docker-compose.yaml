@@ -10,7 +10,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: benchmark:latest
+    image: benchmark:${PT_TAG}
     container_name: metrics-collector
     privileged: true
     pid: host
