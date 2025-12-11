@@ -6,7 +6,7 @@
 MKDOCS_IMAGE ?= asc-mkdocs
 
 build-benchmark-docker:
-	cd docker && $(MAKE) build-all
+	cd docker && PT_TAG=$(PT_TAG) $(MAKE) build-all
 
 docs: clean-docs
 	mkdocs build
