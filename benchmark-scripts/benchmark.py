@@ -76,6 +76,10 @@ def parse_args(print=False):
     parser.add_argument('--init_duration', type=int, default=20,
                         help='initial time in seconds before ' +
                              'starting metric data collection')
+    parser.add_argument('--measurement_window_seconds', type=int, default=30,
+                        help='duration in seconds to collect FPS samples ' +
+                             'after INIT_DURATION for the stream density ' +
+                             'pass/fail decision')
     # TODO: change target_device to an env variable in docker compose
     try:
         default_target_device = resolve_target_device_default('CPU')
@@ -103,9 +107,10 @@ def parse_args(print=False):
         parser.print_help()
         return
     args = parser.parse_args()
-    if args.density_increment and not args.target_fps:
+    if args.density_increment and not args.target_fps and not args.container_names:
         parser.error(
-            '--density_increment needs to have --target_fps be specified')
+            '--density_increment needs --target_fps or --container_names '
+            'to be specified')
     if args.compose_file is None:
         parser.error(
             '--compose_file is empty, please provide compose files')
@@ -165,6 +170,18 @@ def main():
         if my_args.container_names else []
     )
 
+    # Distinguishes a user-supplied target from the synthesized fallback so
+    # the fallback can never be treated as an explicit TARGET_FPS override.
+    explicit_target_fps = bool(target_fps_list)
+
+    # With no explicit target FPS, container names alone drive stream
+    # density; per-camera targetFps/fps (or env TARGET_FPS) resolves the
+    # actual per-stream targets, with DEFAULT_TARGET_FPS as final fallback.
+    if not target_fps_list and container_names_list:
+        target_fps_list = [
+            stream_density.DEFAULT_TARGET_FPS
+        ] * len(container_names_list)
+
     if (len(target_fps_list) > 1
             and len(target_fps_list) != len(container_names_list)):
         raise ValueError(
@@ -203,6 +220,7 @@ def main():
     retail_use_case_root = os.path.abspath(my_args.retail_use_case_root)
     env_vars["RETAIL_USE_CASE_ROOT"] = retail_use_case_root
     env_vars["VLM_WORKLOAD_ENABLED"] = str(os.getenv("LP_VLM_WORKLOAD_ENABLED"))
+    env_vars["MEASUREMENT_WINDOW_SECONDS"] = str(my_args.measurement_window_seconds)
     if my_args.density_increment:
         env_vars["PIPELINE_INC"] = str(my_args.density_increment)
     if len(target_fps_list) > 1 and container_names_list:
@@ -210,18 +228,26 @@ def main():
         print('starting stream density for multiple running pipelines...')
         results = stream_density.run_stream_density(env_vars, compose_files,
                                                     target_fps_list,
-                                                    container_names_list)
+                                                    container_names_list,
+                                                    explicit_target_fps)
         for result in results:
-            target_fps, container_name, num_pipelines, met_fps = result
-            print(
-                f"Completed stream density for target FPS: {target_fps} in "
-                f"container: {container_name}. "
-                f"Max pipelines: {num_pipelines}, "
-                f"Met target FPS? {met_fps}")
+            target_fps, container_name, num_pipelines, met_fps, streams_sustained = result
+            print(f"Result: {'Pass' if met_fps else 'Fail'}")
+            if met_fps:
+                print(
+                    f"Stream density completed: {num_pipelines} pipelines, "
+                    f"{streams_sustained} streams sustained. "
+                    f"For the detailed report, see {results_dir}/stream_density.log")
+            else:
+                print(
+                    f"Stream density did not meet the target. Check "
+                    f"{results_dir}/stream_density.log and "
+                    f"{results_dir}/gst-launch*.log for further analysis.")
     elif len(target_fps_list) == 1:
         # single target_fps stream density mode:
         print('starting stream density...')
-        env_vars["TARGET_FPS"] = str(target_fps_list[0])
+        if explicit_target_fps:
+            env_vars["TARGET_FPS"] = str(target_fps_list[0])
         if my_args.density_increment:
             env_vars["PIPELINE_INC"] = str(my_args.density_increment)
         env_vars["INIT_DURATION"] = str(my_args.init_duration)
@@ -230,12 +256,20 @@ def main():
         container_name = (container_names_list[0]
                           if container_names_list else "default_container")
         results = stream_density.run_stream_density(
-            env_vars, compose_files, [target_fps_list[0]], [container_name])
-        target_fps, container_name, num_pipelines, met_fps = results[0]
-        print(
-            f"Max number of pipelines in stream density found for target "
-            f"FPS = {target_fps} is {num_pipelines}. "
-            f"Met target FPS? {met_fps}")
+            env_vars, compose_files, [target_fps_list[0]], [container_name],
+            explicit_target_fps)
+        target_fps, container_name, num_pipelines, met_fps, streams_sustained = results[0]
+        print(f"Result: {'Pass' if met_fps else 'Fail'}")
+        if met_fps:
+            print(
+                f"Stream density completed: {num_pipelines} pipelines, "
+                f"{streams_sustained} streams sustained. "
+                f"For the detailed report, see {results_dir}/stream_density.log")
+        else:
+            print(
+                "Stream density did not meet the target. Check "
+                f"{results_dir}/stream_density.log and "
+                f"{results_dir}/gst-launch*.log for further analysis.")
     else:
         # regular --pipelines mode:
         stream_density.clean_up_pipeline_logs(results_dir)
