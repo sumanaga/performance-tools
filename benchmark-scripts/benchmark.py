@@ -221,6 +221,7 @@ def main():
     env_vars["RETAIL_USE_CASE_ROOT"] = retail_use_case_root
     env_vars["VLM_WORKLOAD_ENABLED"] = str(os.getenv("LP_VLM_WORKLOAD_ENABLED"))
     env_vars["MEASUREMENT_WINDOW_SECONDS"] = str(my_args.measurement_window_seconds)
+    env_vars["INIT_DURATION"] = str(my_args.init_duration)
     if my_args.density_increment:
         env_vars["PIPELINE_INC"] = str(my_args.density_increment)
     if len(target_fps_list) > 1 and container_names_list:
@@ -250,7 +251,6 @@ def main():
             env_vars["TARGET_FPS"] = str(target_fps_list[0])
         if my_args.density_increment:
             env_vars["PIPELINE_INC"] = str(my_args.density_increment)
-        env_vars["INIT_DURATION"] = str(my_args.init_duration)
         # use a default name since there is no
         # --container_names provided in this case
         container_name = (container_names_list[0]
