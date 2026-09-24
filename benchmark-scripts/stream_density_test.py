@@ -181,6 +181,18 @@ class Testing(unittest.TestCase):
             self.assertEqual(min_p90, 50)
             self.assertEqual(stream_fps, {'pipeline_stream0': 50})
 
+    def test_count_pipeline_scaled_streams(self):
+        stream_fps_dict = {
+            'pipeline_stream0': 15.0,
+            'pipeline_stream1': 12.5,
+            'pipeline_stream2': 0.0,
+        }
+
+        self.assertEqual(
+            stream_density.count_pipeline_scaled_streams(36, stream_fps_dict),
+            72
+        )
+
     def test_clean_up_pipeline_logs(self):
         test_results_dir = './test_results_clean'
         testFile1 = os.path.join(
