@@ -38,14 +38,15 @@ CAMERA_STREAM_KEY = "CAMERA_STREAM"
 class ArgumentError(Exception):
     pass
 
-def build_per_stream_target_fps(stream_fps_dict, default_target_fps):
+def build_per_stream_target_fps(stream_fps_dict, default_target_fps, env_vars=None):
     """Resolve per-stream FPS targets.
 
-    Precedence: env TARGET_FPS (applies to every camera) > per-camera
+    Precedence: TARGET_FPS from env_vars (applies to every camera) > per-camera
     targetFps > per-camera fps > default_target_fps fallback.
     """
+    env_vars = env_vars if env_vars is not None else os.environ
     # Get camera config path
-    camera_stream = os.getenv(CAMERA_STREAM_KEY, "camera_to_workload.json")
+    camera_stream = env_vars.get(CAMERA_STREAM_KEY, "camera_to_workload.json")
     config_path = camera_stream if os.path.isabs(camera_stream) else os.path.normpath(
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "configs", camera_stream)
     )
@@ -103,9 +104,9 @@ def build_per_stream_target_fps(stream_fps_dict, default_target_fps):
     stream_pattern = re.compile(r"pipeline_stream(\d+)")
     per_stream_targets = {}
 
-    # env TARGET_FPS, when set, overrides every camera's config value.
+    # TARGET_FPS from env_vars, when set, overrides every camera's config value.
     forced_target_fps = None
-    env_target_fps = os.getenv(TARGET_FPS_KEY, "").strip()
+    env_target_fps = str(env_vars.get(TARGET_FPS_KEY, "")).strip()
     if env_target_fps:
         try:
             candidate = float(env_target_fps)
@@ -131,9 +132,10 @@ def build_per_stream_target_fps(stream_fps_dict, default_target_fps):
     return per_stream_targets
 
 
-def describe_target_fps_configuration(default_target_fps):
+def describe_target_fps_configuration(default_target_fps, env_vars=None):
     """Describe the configured target FPS values and their sources."""
-    env_target_fps = os.getenv(TARGET_FPS_KEY, "").strip()
+    env_vars = env_vars if env_vars is not None else os.environ
+    env_target_fps = str(env_vars.get(TARGET_FPS_KEY, "")).strip()
     if env_target_fps:
         try:
             forced_target_fps = float(env_target_fps)
@@ -142,7 +144,7 @@ def describe_target_fps_configuration(default_target_fps):
         except ValueError:
             pass
 
-    camera_stream = os.getenv(CAMERA_STREAM_KEY, "camera_to_workload.json")
+    camera_stream = env_vars.get(CAMERA_STREAM_KEY, "camera_to_workload.json")
     config_path = camera_stream if os.path.isabs(camera_stream) else os.path.normpath(
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "configs", camera_stream)
     )
@@ -179,9 +181,10 @@ def describe_target_fps_configuration(default_target_fps):
         return "per-camera target FPS configuration: " + ", ".join(descriptions)
     return f"default target FPS: {default_target_fps:.2f} FPS"
 
-def build_per_stream_camera_meta(stream_fps_dict):
+def build_per_stream_camera_meta(stream_fps_dict, env_vars=None):
     """Build per-stream camera_id and workload labels from camera config."""
-    camera_stream = os.getenv(CAMERA_STREAM_KEY, "camera_to_workload.json")
+    env_vars = env_vars if env_vars is not None else os.environ
+    camera_stream = env_vars.get(CAMERA_STREAM_KEY, "camera_to_workload.json")
     config_path = camera_stream if os.path.isabs(camera_stream) else os.path.normpath(
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "configs", camera_stream)
     )
@@ -681,6 +684,20 @@ def validate_and_setup_env(env_vars, target_fps_list):
         env_vars[INIT_DURATION_KEY] = "120"
 
 
+def count_pipeline_scaled_streams(num_pipelines, stream_fps_dict):
+    """Return the number of concurrent streams actually in flight.
+
+    The FPS map is keyed by stream index, and each index aggregates the latest
+    num_pipelines log files. The report must therefore scale the number of valid
+    stream indices by the active pipeline count so it matches the returned
+    pipeline-scaled result.
+    """
+    valid_streams = sum(
+        1 for measured in stream_fps_dict.values() if float(measured) > 0
+    )
+    return int(num_pipelines) * valid_streams
+
+
 def print_stream_density_report(num_pipelines, stream_fps_dict,
                                 stream_target_fps, pass_thresholds,
                                 measurement_window_seconds,
@@ -709,8 +726,8 @@ def print_stream_density_report(num_pipelines, stream_fps_dict,
     print("")
     print("Stream density result")
     print("-" * 47)
-    camera_stream_count = sum(
-        1 for measured in stream_fps_dict.values() if float(measured) > 0
+    camera_stream_count = count_pipeline_scaled_streams(
+        num_pipelines, stream_fps_dict
     )
     print(f"Streams sustained        {camera_stream_count}")
     if init_duration_seconds is not None:
@@ -719,13 +736,14 @@ def print_stream_density_report(num_pipelines, stream_fps_dict,
             f"(INIT_DURATION before measuring)")
     print(
         f"Measurement window       {measurement_window_seconds} s per window; "
-        f"{consecutive_pass_windows} consecutive windows must agree")
+        f"ramp-up is immediate, confirmation uses {consecutive_pass_windows} pass windows")
     print(
         "                         (each window is measured on its own; the "
-        "count moves")
+        "count is not accumulated)")
     print(
-        f"                          only after {consecutive_pass_windows} "
-        f"windows in a row agree - windows are not added together)")
+        f"                          passing windows increase the count during ramp-up, "
+        f"and the final density is accepted only after {consecutive_pass_windows} "
+        f"consecutive pass windows agree")
     print(
         f"Pass mark                target x {pass_tolerance_ratio:g} "
         f"(pass tolerance ratio)")
@@ -838,7 +856,7 @@ def run_pipeline_iterations(
 
     # clean up any residual pipeline log files before starts:
     clean_up_pipeline_logs(results_dir)
-    target_fps_label = describe_target_fps_configuration(target_fps)
+    target_fps_label = describe_target_fps_configuration(target_fps, env_vars=env_vars)
     print(
         f"INFO: Stream density {target_fps_label} "
         f"with container_name {container_name} "
@@ -910,8 +928,8 @@ def run_pipeline_iterations(
             num_pipelines, results_dir, container_name, env_vars,
             start_offsets=window_start_offsets,
             end_offsets=window_end_offsets)
-        streams_sustained = sum(
-            1 for measured in stream_fps_dict.values() if float(measured) > 0
+        streams_sustained = count_pipeline_scaled_streams(
+            num_pipelines, stream_fps_dict
         )
 
         print('container name:', container_name)
@@ -932,7 +950,7 @@ def run_pipeline_iterations(
 
         # --- Decide scaling logic (per-stream thresholds) ---
         stream_target_fps = build_per_stream_target_fps(
-            stream_fps_dict, target_fps
+            stream_fps_dict, target_fps, env_vars=env_vars
         )
 
         pass_thresholds = {
@@ -1013,7 +1031,7 @@ def run_pipeline_iterations(
                     )
                     increments = 0
                     stream_camera_meta = build_per_stream_camera_meta(
-                        stream_fps_dict)
+                        stream_fps_dict, env_vars=env_vars)
                     print_stream_density_report(
                         num_pipelines, stream_fps_dict, stream_target_fps,
                         pass_thresholds, measurement_window_seconds,
@@ -1030,10 +1048,25 @@ def run_pipeline_iterations(
             elif num_pipelines <= 1:
                 pass_window_count = 0
                 fail_window_count = 0
-                print(
-                    f"already reached num. pipeline 1, and the fps per stream is "
-                    f"{total_fps_per_stream} but target FPS map is {stream_target_fps}"
+                per_stream_fps = [
+                    float(value) for value in stream_fps_dict.values() if float(value) > 0
+                ]
+                avg_stream_fps = (
+                    statistics.mean(per_stream_fps)
+                    if per_stream_fps else 0.0
                 )
+                print(
+                    f"already reached num. pipeline 1, and the average fps per stream is "
+                    f"{avg_stream_fps:.2f} but target FPS map is {stream_target_fps}"
+                )
+                stream_camera_meta = build_per_stream_camera_meta(
+                    stream_fps_dict, env_vars=env_vars)
+                print_stream_density_report(
+                    num_pipelines, stream_fps_dict, stream_target_fps,
+                    pass_thresholds, measurement_window_seconds,
+                    consecutive_pass_windows, consecutive_fail_windows,
+                    pass_tolerance_ratio, stream_camera_meta,
+                    INIT_DURATION)
                 meet_target_fps = False
                 break
             else:
